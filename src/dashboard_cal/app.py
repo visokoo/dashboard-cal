@@ -26,13 +26,6 @@ from .ui.weather_strip import WeatherStrip
 
 log = logging.getLogger(__name__)
 
-# Right-edge swipe configuration. A horizontal fling whose release velocity
-# is at least ``SWIPE_VELOCITY_THRESHOLD`` px/s (negative = leftward) and
-# whose end position lands in the rightmost ``EDGE_SWIPE_FRACTION`` of the
-# viewport opens the tasks modal. A symmetric rightward fling closes it.
-SWIPE_VELOCITY_THRESHOLD = 500
-EDGE_SWIPE_FRACTION = 0.15
-
 
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[2]
@@ -64,9 +57,6 @@ class DashboardApp:
         self.todos_panel: TodosPanel | None = None
         self.grocery_panel: GroceryPanel | None = None
         self.tasks_modal: TasksModal | None = None
-        # Page reference set from ``main`` so event handlers (which fire later)
-        # can open dialogs / schedule tasks without re-plumbing it.
-        self._page: ft.Page | None = None
 
     # ------------------------------------------------------------------
     # auth (lazy)
@@ -93,7 +83,6 @@ class DashboardApp:
     # UI build
     # ------------------------------------------------------------------
     async def main(self, page: ft.Page) -> None:
-        self._page = page
         page.title = "dashboard-cal"
         # Flet 0.85: Theme.theme is the light-mode theme; dark_theme is dark-mode.
         # Set both to the same seed so the look is consistent regardless of mode.
@@ -165,9 +154,8 @@ class DashboardApp:
 
     def _compose(self) -> ft.Control:
         # Top row: clock (left) + weather strip (middle, expanding) + tasks
-        # icon button (right). The icon button is the always-visible
-        # affordance for opening the tasks modal; the right-edge swipe
-        # gesture (wired below) is a complementary discovery path.
+        # icon button (right). Tapping the icon button is the only way to
+        # open the tasks modal -- there is intentionally no swipe gesture.
         weather_bar = ft.Container(
             content=self.weather_strip,
             padding=12,
@@ -214,22 +202,11 @@ class DashboardApp:
             expand=True,
         )
 
-        # GestureDetector wraps the foreground so we can pick up a
-        # right-to-left fling that originates in the right edge of the
-        # screen. Calendar taps and the clock both still receive their own
-        # ``on_click`` events; Flet routes taps and drags separately.
-        gesture_layer = ft.GestureDetector(
-            content=foreground,
-            on_horizontal_drag_start=self._on_horizontal_drag_start,
-            on_horizontal_drag_end=self._on_horizontal_drag_end,
-        )
-        self._drag_start_x: float | None = None
-
-        # Stack order: photo background, gesture-wrapped foreground, then
-        # the tasks modal sits on top so its scrim + panel render above the
-        # calendar when open.
+        # Stack order: photo background, foreground, then the tasks modal
+        # sits on top so its scrim + panel render above the calendar when
+        # open.
         return ft.Stack(
-            controls=[self.background, gesture_layer, self.tasks_modal],
+            controls=[self.background, foreground, self.tasks_modal],
             expand=True,
         )
 
@@ -290,7 +267,7 @@ class DashboardApp:
             self.event_sheet.show_event(page, ev)
 
     # ------------------------------------------------------------------
-    # tasks modal: gestures + button affordance
+    # tasks modal: open / close
     # ------------------------------------------------------------------
     def _open_tasks(self, _e: ft.ControlEvent | None = None) -> None:
         if self.tasks_modal is not None:
@@ -299,40 +276,6 @@ class DashboardApp:
     def _close_tasks(self, _e: ft.ControlEvent | None = None) -> None:
         if self.tasks_modal is not None:
             self.tasks_modal.close()
-
-    def _on_horizontal_drag_start(self, e: ft.ControlEvent) -> None:
-        # Record where the drag started so ``_on_horizontal_drag_end`` can
-        # decide whether it began near the right edge of the screen.
-        # ``local_x`` on Flet drag-start events is the x-coordinate within
-        # the GestureDetector's content area.
-        self._drag_start_x = getattr(e, "local_x", None)
-
-    def _on_horizontal_drag_end(self, e: ft.ControlEvent) -> None:
-        start_x = self._drag_start_x
-        self._drag_start_x = None
-        if start_x is None or self._page is None:
-            return
-
-        velocity = getattr(e, "primary_velocity", None)
-        if velocity is None:
-            return
-
-        # Use the page width to compute the right-edge band. ``page.width``
-        # is the live viewport width; defensive defaults keep this from
-        # crashing if Flet hasn't populated it yet on startup.
-        page_w = getattr(self._page, "width", None) or 0
-        if page_w <= 0:
-            return
-
-        edge_threshold = page_w * (1.0 - EDGE_SWIPE_FRACTION)
-        started_at_right_edge = start_x >= edge_threshold
-
-        if velocity <= -SWIPE_VELOCITY_THRESHOLD and started_at_right_edge:
-            self._open_tasks()
-        elif velocity >= SWIPE_VELOCITY_THRESHOLD and self.tasks_modal and self.tasks_modal.is_open:
-            # Symmetric: a rightward fling closes the panel whenever it's open
-            # (no edge check needed -- the panel itself is at the right edge).
-            self._close_tasks()
 
     # ------------------------------------------------------------------
     # refresh loops

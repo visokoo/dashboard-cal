@@ -21,7 +21,7 @@ import flet as ft
 from .. import theme
 from ..services.tasks import GroceryItem, TasksService
 from ..services.todos import Todo, TodoStore
-from ._util import safe_update
+from ._util import safe_update, show_touch_keyboard
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +43,11 @@ class _ChecklistColumn(ft.Column):
             cursor_color=theme.PRIMARY,
             expand=True,
             dense=True,
+            # On Surface devices the Windows touch keyboard normally pops
+            # itself when a text input gains focus, but Flutter on Windows
+            # desktop doesn't always trigger that. Launch TabTip explicitly
+            # so tapping the field always opens the on-screen keyboard.
+            on_focus=lambda _e: show_touch_keyboard(),
         )
         self._add_btn = ft.IconButton(
             icon=ft.Icons.ADD_CIRCLE,
@@ -127,7 +132,12 @@ class TodosPanel(_ChecklistColumn):
         self._input.value = ""
         self._input.error_text = None
         self.refresh()
-        self._input.focus()
+        # ``TextField.focus`` is a coroutine in Flet 0.85+, so we can't
+        # call it directly from a sync handler -- doing so triggers
+        # "coroutine ... was never awaited". Schedule it via the page.
+        page = self._input.page
+        if page is not None:
+            page.run_task(self._input.focus)
 
 
 class GroceryPanel(_ChecklistColumn):
@@ -243,6 +253,9 @@ class GroceryPanel(_ChecklistColumn):
             self._input.value = ""
             self._input.error_text = None
             await self.refresh()
-            self._input.focus()
+            # ``focus`` is async in Flet 0.85; await it here so the
+            # coroutine actually runs (previously it was created and
+            # discarded, producing a "never awaited" warning).
+            await self._input.focus()
 
         self._run_async(_do())
