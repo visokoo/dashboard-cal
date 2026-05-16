@@ -103,19 +103,28 @@ class CalendarView(ft.Container):
         self._header_text = ft.Text(
             "", color=theme.TEXT, size=28, weight=ft.FontWeight.W_500
         )
+        # Shared style for the two chip-shaped header buttons (Today, view toggle).
+        _chip_style = ft.ButtonStyle(
+            side=ft.BorderSide(1, theme.DIVIDER),
+            shape=ft.RoundedRectangleBorder(radius=8),
+            padding=ft.Padding.symmetric(horizontal=14, vertical=8),
+        )
         self._today_btn = ft.OutlinedButton(
             content=ft.Text("Today", color=theme.TEXT, size=14),
             on_click=self._go_today,
-            style=ft.ButtonStyle(
-                side=ft.BorderSide(1, theme.DIVIDER),
-                shape=ft.RoundedRectangleBorder(radius=8),
-                padding=ft.Padding.symmetric(horizontal=14, vertical=8),
-            ),
+            style=_chip_style,
         )
-        self._toggle_btn = ft.TextButton(
-            content="Week" if default_view == "month" else "Month",
+        # Keep a handle on the inner Text so ``_toggle_view`` can flip the
+        # label without rebuilding the button.
+        self._toggle_label = ft.Text(
+            "Week" if default_view == "month" else "Month",
+            color=theme.TEXT,
+            size=14,
+        )
+        self._toggle_btn = ft.OutlinedButton(
+            content=self._toggle_label,
             on_click=self._toggle_view,
-            style=ft.ButtonStyle(color=theme.TEXT),
+            style=_chip_style,
         )
         header = ft.Row(
             controls=[
@@ -222,7 +231,7 @@ class CalendarView(ft.Container):
         # snap back when you switch to the other. Use the "Today" button to
         # jump to the current week / month explicitly.
         self._view_mode = "week" if self._view_mode == "month" else "month"
-        self._toggle_btn.content = "Month" if self._view_mode == "week" else "Week"
+        self._toggle_label.value = "Month" if self._view_mode == "week" else "Week"
         self._render()
         if self._on_window_change:
             self._on_window_change()
