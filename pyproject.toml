@@ -1,0 +1,50 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dashboard-cal"
+version = "0.1.0"
+description = "A Skylight-style wall dashboard for Surface Pro 3 with Google Calendar, weather, todos, grocery, and photo background."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "vivianta" }]
+dependencies = [
+  "flet>=0.80",
+  "google-auth>=2.35",
+  "google-auth-oauthlib>=1.2",
+  "google-api-python-client>=2.150",
+  "keyring>=25.5",
+  "pydantic>=2.9",
+  "pydantic-settings>=2.6",
+  "PyYAML>=6.0",
+  "httpx>=0.27",
+  "platformdirs>=4.3",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "ruff>=0.7",
+  "mypy>=1.13",
+]
+
+[project.scripts]
+dashboard-cal = "dashboard_cal.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dashboard_cal"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B", "S"]
+ignore = ["S101"]   # allow asserts in tests
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

@@ -1,0 +1,27 @@
+weather:
+  zip_code: "98101"
+  country: "US"
+  unit: fahrenheit
+  forecast_days: 6
+
+calendar:
+  calendars: [primary]
+  week_start: sunday
+  default_view: month
+
+tasks:
+  list_name: "Grocery"
+
+photos:
+  folder: "~/Pictures/dashboard-bg"
+  rotation_seconds: 60
+  shuffle: true
+  dim_percent: 35
+
+ui:
+  fullscreen: true
+  theme: dark
+  refresh:
+    calendar_seconds: 300
+    tasks_seconds: 120
+    weather_seconds: 900
