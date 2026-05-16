@@ -12,16 +12,15 @@ vertically, place them side-by-side, or wrap them in tabs.
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from typing import Callable
+from typing import Awaitable, Callable
 
 import flet as ft
 
 from .. import theme
 from ..services.tasks import GroceryItem, TasksService
 from ..services.todos import Todo, TodoStore
-from ._util import safe_update, show_touch_keyboard
+from ._util import safe_update
 
 log = logging.getLogger(__name__)
 
@@ -43,11 +42,6 @@ class _ChecklistColumn(ft.Column):
             cursor_color=theme.PRIMARY,
             expand=True,
             dense=True,
-            # On Surface devices the Windows touch keyboard normally pops
-            # itself when a text input gains focus, but Flutter on Windows
-            # desktop doesn't always trigger that. Launch TabTip explicitly
-            # so tapping the field always opens the on-screen keyboard.
-            on_focus=lambda _e: show_touch_keyboard(),
         )
         self._add_btn = ft.IconButton(
             icon=ft.Icons.ADD_CIRCLE,
@@ -146,7 +140,10 @@ class GroceryPanel(_ChecklistColumn):
     def __init__(
         self,
         tasks: TasksService | None,
-        run_async: Callable[[asyncio.coroutines], asyncio.Task],
+        # ``run_async`` must accept a coroutine *function* (e.g. Flet's
+        # ``page.run_task``), not a coroutine object. Passing a coroutine
+        # produces "handler must be a coroutine function" at runtime.
+        run_async: Callable[[Callable[[], Awaitable[None]]], object],
     ) -> None:
         super().__init__("Grocery")
         self._tasks = tasks
@@ -221,7 +218,7 @@ class GroceryPanel(_ChecklistColumn):
                 log.warning("grocery: toggle failed type=%s", type(e).__name__)
             await self.refresh()
 
-        self._run_async(_do())
+        self._run_async(_do)
 
     def _delete(self, item_id: str) -> None:
         if not self._tasks:
@@ -234,7 +231,7 @@ class GroceryPanel(_ChecklistColumn):
                 log.warning("grocery: delete failed type=%s", type(e).__name__)
             await self.refresh()
 
-        self._run_async(_do())
+        self._run_async(_do)
 
     def _on_submit(self, _e: ft.ControlEvent) -> None:
         if not self._tasks:
@@ -258,4 +255,4 @@ class GroceryPanel(_ChecklistColumn):
             # discarded, producing a "never awaited" warning).
             await self._input.focus()
 
-        self._run_async(_do())
+        self._run_async(_do)
