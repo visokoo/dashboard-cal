@@ -1,4 +1,4 @@
-"""Flet app shell: layout, kiosk window setup, refresh loops, idle cursor."""
+"""Flet app shell: layout, kiosk window setup, refresh loops."""
 
 from __future__ import annotations
 
@@ -20,14 +20,18 @@ from .ui.background import Background
 from .ui.calendar_view import CalendarView
 from .ui.clock import Clock
 from .ui.event_sheet import EventSheet
+from .ui.side_panel import GroceryPanel, TodosPanel
+from .ui.tasks_modal import TasksModal
 from .ui.weather_strip import WeatherStrip
 
-# NOTE: The Todos/Grocery side panel (``ui.side_panel``) is intentionally not
-# imported here. Its UI is hidden for now; the underlying ``TodoStore`` and
-# ``TasksService`` services are still wired so the data layer keeps working
-# and the panel can be re-enabled without losing state.
-
 log = logging.getLogger(__name__)
+
+# Right-edge swipe configuration. A horizontal fling whose release velocity
+# is at least ``SWIPE_VELOCITY_THRESHOLD`` px/s (negative = leftward) and
+# whose end position lands in the rightmost ``EDGE_SWIPE_FRACTION`` of the
+# viewport opens the tasks modal. A symmetric rightward fling closes it.
+SWIPE_VELOCITY_THRESHOLD = 500
+EDGE_SWIPE_FRACTION = 0.15
 
 
 def _project_root() -> Path:
@@ -50,12 +54,19 @@ class DashboardApp:
         self.calendar_svc: CalendarService | None = None
         self.tasks_svc: TasksService | None = None
 
-        # UI controls (built in build_ui)
+        # UI controls (built in main(); None until then so we don't accidentally
+        # touch Flet APIs before the page exists).
         self.background: Background | None = None
         self.weather_strip: WeatherStrip | None = None
         self.calendar_view: CalendarView | None = None
         self.event_sheet: EventSheet | None = None
         self.clock: Clock | None = None
+        self.todos_panel: TodosPanel | None = None
+        self.grocery_panel: GroceryPanel | None = None
+        self.tasks_modal: TasksModal | None = None
+        # Page reference set from ``main`` so event handlers (which fire later)
+        # can open dialogs / schedule tasks without re-plumbing it.
+        self._page: ft.Page | None = None
 
     # ------------------------------------------------------------------
     # auth (lazy)
@@ -82,6 +93,7 @@ class DashboardApp:
     # UI build
     # ------------------------------------------------------------------
     async def main(self, page: ft.Page) -> None:
+        self._page = page
         page.title = "dashboard-cal"
         # Flet 0.85: Theme.theme is the light-mode theme; dark_theme is dark-mode.
         # Set both to the same seed so the look is consistent regardless of mode.
@@ -120,33 +132,61 @@ class DashboardApp:
             lambda: page.run_task(self._refresh_calendar)
         )
 
+        # Tasks / grocery side panels and the slide-in modal that hosts them.
+        self.todos_panel = TodosPanel(self.todos)
+        self.grocery_panel = GroceryPanel(
+            tasks=None,
+            run_async=page.run_task,
+        )
+        self.tasks_modal = TasksModal(self._build_tasks_panel_content())
+
         page.add(self._compose())
 
         # Initial state without network:
         self.background.start(page)
         self.clock.start(page)
+        # Local todos load synchronously from SQLite.
+        self.todos_panel.refresh()
 
         # Now bring up Google services and start refresh loops.
         self._try_init_google()
+        if self.tasks_svc and self.grocery_panel is not None:
+            self.grocery_panel.set_service(self.tasks_svc)
 
         await asyncio.gather(
             self._refresh_calendar(),
             self._refresh_weather(),
+            self._refresh_grocery(),
         )
 
         page.run_task(self._loop_calendar)
         page.run_task(self._loop_weather)
+        page.run_task(self._loop_grocery)
 
     def _compose(self) -> ft.Control:
-        # Top row: clock (left) + weather strip (rest of the width). The
-        # Todos/Grocery side panel has been removed for now so the calendar
-        # grid below has room for event titles.
+        # Top row: clock (left) + weather strip (middle, expanding) + tasks
+        # icon button (right). The icon button is the always-visible
+        # affordance for opening the tasks modal; the right-edge swipe
+        # gesture (wired below) is a complementary discovery path.
         weather_bar = ft.Container(
             content=self.weather_strip,
             padding=12,
             bgcolor=theme.SURFACE_LOW,
             border_radius=theme.CARD_RADIUS,
             expand=True,
+        )
+        tasks_btn = ft.Container(
+            content=ft.IconButton(
+                icon=ft.Icons.CHECKLIST,
+                icon_color=theme.TEXT,
+                icon_size=28,
+                tooltip="Open tasks",
+                on_click=self._open_tasks,
+            ),
+            width=72,
+            bgcolor=theme.SURFACE_LOW,
+            border_radius=theme.CARD_RADIUS,
+            alignment=ft.Alignment.CENTER,
         )
         top_row = ft.Container(
             content=ft.Row(
@@ -155,6 +195,7 @@ class DashboardApp:
                 controls=[
                     ft.Container(content=self.clock, width=320),
                     weather_bar,
+                    tasks_btn,
                 ],
             ),
             height=140,
@@ -173,10 +214,61 @@ class DashboardApp:
             expand=True,
         )
 
-        # Stack the photo background under the foreground.
+        # GestureDetector wraps the foreground so we can pick up a
+        # right-to-left fling that originates in the right edge of the
+        # screen. Calendar taps and the clock both still receive their own
+        # ``on_click`` events; Flet routes taps and drags separately.
+        gesture_layer = ft.GestureDetector(
+            content=foreground,
+            on_horizontal_drag_start=self._on_horizontal_drag_start,
+            on_horizontal_drag_end=self._on_horizontal_drag_end,
+        )
+        self._drag_start_x: float | None = None
+
+        # Stack order: photo background, gesture-wrapped foreground, then
+        # the tasks modal sits on top so its scrim + panel render above the
+        # calendar when open.
         return ft.Stack(
-            controls=[self.background, foreground],
+            controls=[self.background, gesture_layer, self.tasks_modal],
             expand=True,
+        )
+
+    def _build_tasks_panel_content(self) -> ft.Control:
+        """Vertical layout for the slide-in tasks modal.
+
+        Drawer header (title + close button) on top, then Todos, then a
+        divider, then Grocery. ``Column.scroll`` keeps the whole thing
+        scrollable if the user adds many items.
+        """
+        header = ft.Row(
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            controls=[
+                ft.Text(
+                    "Tasks",
+                    color=theme.TEXT,
+                    size=22,
+                    weight=ft.FontWeight.W_600,
+                    expand=True,
+                ),
+                ft.IconButton(
+                    icon=ft.Icons.CLOSE,
+                    icon_color=theme.TEXT_MUTED,
+                    on_click=self._close_tasks,
+                    tooltip="Close",
+                ),
+            ],
+        )
+        return ft.Column(
+            spacing=12,
+            scroll=ft.ScrollMode.AUTO,
+            expand=True,
+            controls=[
+                header,
+                ft.Divider(color=theme.DIVIDER, height=8),
+                self.todos_panel,
+                ft.Divider(color=theme.DIVIDER, height=16),
+                self.grocery_panel,
+            ],
         )
 
     # ------------------------------------------------------------------
@@ -196,6 +288,51 @@ class DashboardApp:
         page = self.calendar_view.page
         if page:
             self.event_sheet.show_event(page, ev)
+
+    # ------------------------------------------------------------------
+    # tasks modal: gestures + button affordance
+    # ------------------------------------------------------------------
+    def _open_tasks(self, _e: ft.ControlEvent | None = None) -> None:
+        if self.tasks_modal is not None:
+            self.tasks_modal.open()
+
+    def _close_tasks(self, _e: ft.ControlEvent | None = None) -> None:
+        if self.tasks_modal is not None:
+            self.tasks_modal.close()
+
+    def _on_horizontal_drag_start(self, e: ft.ControlEvent) -> None:
+        # Record where the drag started so ``_on_horizontal_drag_end`` can
+        # decide whether it began near the right edge of the screen.
+        # ``local_x`` on Flet drag-start events is the x-coordinate within
+        # the GestureDetector's content area.
+        self._drag_start_x = getattr(e, "local_x", None)
+
+    def _on_horizontal_drag_end(self, e: ft.ControlEvent) -> None:
+        start_x = self._drag_start_x
+        self._drag_start_x = None
+        if start_x is None or self._page is None:
+            return
+
+        velocity = getattr(e, "primary_velocity", None)
+        if velocity is None:
+            return
+
+        # Use the page width to compute the right-edge band. ``page.width``
+        # is the live viewport width; defensive defaults keep this from
+        # crashing if Flet hasn't populated it yet on startup.
+        page_w = getattr(self._page, "width", None) or 0
+        if page_w <= 0:
+            return
+
+        edge_threshold = page_w * (1.0 - EDGE_SWIPE_FRACTION)
+        started_at_right_edge = start_x >= edge_threshold
+
+        if velocity <= -SWIPE_VELOCITY_THRESHOLD and started_at_right_edge:
+            self._open_tasks()
+        elif velocity >= SWIPE_VELOCITY_THRESHOLD and self.tasks_modal and self.tasks_modal.is_open:
+            # Symmetric: a rightward fling closes the panel whenever it's open
+            # (no edge check needed -- the panel itself is at the right edge).
+            self._close_tasks()
 
     # ------------------------------------------------------------------
     # refresh loops
@@ -224,6 +361,18 @@ class DashboardApp:
         )
         self.weather_strip.update_forecast(days)
 
+    async def _refresh_grocery(self) -> None:
+        """Pull the latest grocery items from Google Tasks (if authed)."""
+        if self.grocery_panel is None:
+            return
+        try:
+            await self.grocery_panel.refresh()
+        except Exception as e:
+            # ``refresh()`` already swallows HttpError internally and logs
+            # the status. This catch is a safety net for unexpected errors;
+            # we log only the type per the logging-security rule.
+            log.warning("grocery: refresh failed type=%s", type(e).__name__)
+
     async def _loop_calendar(self) -> None:
         await asyncio.sleep(self.settings.ui.refresh.calendar_seconds)
         while True:
@@ -235,6 +384,12 @@ class DashboardApp:
         while True:
             await self._refresh_weather()
             await asyncio.sleep(self.settings.ui.refresh.weather_seconds)
+
+    async def _loop_grocery(self) -> None:
+        await asyncio.sleep(self.settings.ui.refresh.tasks_seconds)
+        while True:
+            await self._refresh_grocery()
+            await asyncio.sleep(self.settings.ui.refresh.tasks_seconds)
 
 
 def run(*, force_reauth: bool = False) -> None:

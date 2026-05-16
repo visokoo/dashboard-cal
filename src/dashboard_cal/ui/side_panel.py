@@ -1,4 +1,14 @@
-"""Tabbed side panel: local Todos and Google Tasks-backed Grocery list."""
+"""Reusable Todos and Google Tasks-backed Grocery checklist columns.
+
+Each ``_ChecklistColumn`` is a vertical Todos/Grocery widget with a header,
+a scrolling list, an input field, and an add-button. ``TodosPanel`` is
+backed by the local SQLite ``TodoStore``; ``GroceryPanel`` is backed by
+``TasksService`` (Google Tasks).
+
+These columns are designed to be embedded into another container -- e.g.
+the slide-in ``TasksModal`` -- which decides whether to stack them
+vertically, place them side-by-side, or wrap them in tabs.
+"""
 
 from __future__ import annotations
 
@@ -236,46 +246,3 @@ class GroceryPanel(_ChecklistColumn):
             self._input.focus()
 
         self._run_async(_do())
-
-
-class SidePanel(ft.Container):
-    """Tabs: Todos | Grocery.
-
-    Flet 1.0 restructured Tabs: labels live on ``TabBar`` (via ``Tab.label``)
-    and content lives on ``TabBarView``. The two are composed inside a
-    ``Tabs`` control via its ``content`` (typically a Column).
-    """
-
-    def __init__(self, todos_panel: TodosPanel, grocery_panel: GroceryPanel) -> None:
-        self.todos = todos_panel
-        self.grocery = grocery_panel
-        tabs = ft.Tabs(
-            length=2,
-            selected_index=0,
-            expand=True,
-            content=ft.Column(
-                expand=True,
-                controls=[
-                    ft.TabBar(
-                        tabs=[
-                            ft.Tab(label="Todos"),
-                            ft.Tab(label="Grocery"),
-                        ],
-                    ),
-                    ft.TabBarView(
-                        expand=True,
-                        controls=[
-                            ft.Container(content=todos_panel, padding=12),
-                            ft.Container(content=grocery_panel, padding=12),
-                        ],
-                    ),
-                ],
-            ),
-        )
-        super().__init__(
-            content=tabs,
-            bgcolor=theme.SURFACE,
-            border_radius=theme.CARD_RADIUS,
-            padding=8,
-            expand=True,
-        )
