@@ -16,6 +16,7 @@ from .services.calendar import CalendarService, Event
 from .services.tasks import TasksService
 from .services.todos import TodoStore
 from .services.weather import fetch_forecast
+from .ui._util import safe_update
 from .ui.background import Background
 from .ui.calendar_view import CalendarView
 from .ui.clock import Clock
@@ -57,6 +58,10 @@ class DashboardApp:
         self.todos_panel: TodosPanel | None = None
         self.grocery_panel: GroceryPanel | None = None
         self.tasks_modal: TasksModal | None = None
+        # Small red dot overlaid on the tasks button when either checklist
+        # has at least one unchecked item. Built in ``_compose``; mutated
+        # from ``_update_tasks_badge``.
+        self._tasks_badge: ft.Container | None = None
 
     # ------------------------------------------------------------------
     # auth (lazy)
@@ -122,10 +127,13 @@ class DashboardApp:
         )
 
         # Tasks / grocery side panels and the slide-in modal that hosts them.
-        self.todos_panel = TodosPanel(self.todos)
+        # ``on_change`` lets each panel notify us when its data shifts so we
+        # can keep the tasks-button badge in sync without a polling loop.
+        self.todos_panel = TodosPanel(self.todos, on_change=self._update_tasks_badge)
         self.grocery_panel = GroceryPanel(
             tasks=None,
             run_async=page.run_task,
+            on_change=self._update_tasks_badge,
         )
         self.tasks_modal = TasksModal(self._build_tasks_panel_content())
 
@@ -154,8 +162,8 @@ class DashboardApp:
 
     def _compose(self) -> ft.Control:
         # Top row: clock (left) + weather strip (middle, expanding) + tasks
-        # icon button (right). Tapping the icon button is the only way to
-        # open the tasks modal -- there is intentionally no swipe gesture.
+        # button (right). Tapping the tasks button is the only way to open
+        # the tasks modal -- there is intentionally no swipe gesture.
         weather_bar = ft.Container(
             content=self.weather_strip,
             padding=12,
@@ -163,18 +171,51 @@ class DashboardApp:
             border_radius=theme.CARD_RADIUS,
             expand=True,
         )
+
+        # Small red notification dot pinned to the top-right corner of the
+        # tasks button. ``visible`` toggles in ``_update_tasks_badge`` based
+        # on whether either checklist still has unchecked items.
+        self._tasks_badge = ft.Container(
+            width=12,
+            height=12,
+            bgcolor=theme.ERROR,
+            border_radius=6,
+            visible=False,
+        )
+
+        # The whole card is the hit target -- not just the icon. Using an
+        # outer ``Container`` with ``on_click`` + ``ink=True`` gives the
+        # entire 72px-wide card a Material ripple and makes it forgiving
+        # to tap on a touchscreen. The icon and badge ride along inside a
+        # Stack so the badge floats over the top-right corner of the card.
         tasks_btn = ft.Container(
-            content=ft.IconButton(
-                icon=ft.Icons.CHECKLIST,
-                icon_color=theme.TEXT,
-                icon_size=28,
-                tooltip="Open tasks",
-                on_click=self._open_tasks,
+            content=ft.Stack(
+                controls=[
+                    ft.Container(
+                        content=ft.Icon(
+                            ft.Icons.CHECKLIST,
+                            color=theme.TEXT,
+                            size=28,
+                        ),
+                        alignment=ft.Alignment.CENTER,
+                        expand=True,
+                    ),
+                    # Positioned overlay: top-right corner inset slightly so
+                    # the dot doesn't kiss the card edge.
+                    ft.Container(
+                        content=self._tasks_badge,
+                        right=14,
+                        top=14,
+                    ),
+                ],
+                expand=True,
             ),
             width=72,
             bgcolor=theme.SURFACE_LOW,
             border_radius=theme.CARD_RADIUS,
-            alignment=ft.Alignment.CENTER,
+            on_click=self._open_tasks,
+            ink=True,
+            tooltip="Open tasks",
         )
         top_row = ft.Container(
             content=ft.Row(
@@ -276,6 +317,26 @@ class DashboardApp:
     def _close_tasks(self, _e: ft.ControlEvent | None = None) -> None:
         if self.tasks_modal is not None:
             self.tasks_modal.close()
+
+    def _update_tasks_badge(self) -> None:
+        """Show the notification dot iff either checklist has unchecked items.
+
+        Called from ``TodosPanel`` and ``GroceryPanel`` via their
+        ``on_change`` hooks after every add / toggle / delete / refresh.
+        ``safe_update`` swallows the not-yet-mounted exception so the very
+        first refresh (which may run before ``page.add`` finishes) doesn't
+        crash the UI.
+        """
+        if self._tasks_badge is None:
+            return
+        unchecked = False
+        if self.todos_panel is not None and self.todos_panel.has_unchecked():
+            unchecked = True
+        elif self.grocery_panel is not None and self.grocery_panel.has_unchecked():
+            unchecked = True
+        if self._tasks_badge.visible != unchecked:
+            self._tasks_badge.visible = unchecked
+            safe_update(self._tasks_badge)
 
     # ------------------------------------------------------------------
     # refresh loops

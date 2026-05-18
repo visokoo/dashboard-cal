@@ -61,16 +61,35 @@ class _ChecklistColumn(ft.Column):
 
 
 class TodosPanel(_ChecklistColumn):
-    def __init__(self, store: TodoStore) -> None:
+    def __init__(
+        self,
+        store: TodoStore,
+        on_change: Callable[[], None] | None = None,
+    ) -> None:
         super().__init__("Todos")
         self._store = store
+        # Observer hook: invoked after any state-changing operation so the
+        # parent UI can react (e.g. updating an unread/unchecked badge on
+        # the tasks button).
+        self._on_change = on_change
         self._input.on_submit = self._on_submit
         self._add_btn.on_click = self._on_submit
+
+    def has_unchecked(self) -> bool:
+        """True if at least one todo is not yet checked off."""
+        try:
+            return any(not t.done for t in self._store.list())
+        except Exception as e:
+            # SQLite failure shouldn't crash the badge logic.
+            log.warning("todos: has_unchecked failed type=%s", type(e).__name__)
+            return False
 
     def refresh(self) -> None:
         items = self._store.list()
         self._list.controls = [self._row(t) for t in items]
         safe_update(self)
+        if self._on_change is not None:
+            self._on_change()
 
     def _row(self, t: Todo) -> ft.Control:
         cb = ft.Checkbox(
@@ -144,15 +163,23 @@ class GroceryPanel(_ChecklistColumn):
         # ``page.run_task``), not a coroutine object. Passing a coroutine
         # produces "handler must be a coroutine function" at runtime.
         run_async: Callable[[Callable[[], Awaitable[None]]], object],
+        on_change: Callable[[], None] | None = None,
     ) -> None:
         super().__init__("Grocery")
         self._tasks = tasks
         self._run_async = run_async
         self._items: list[GroceryItem] = []
+        # Observer hook (see TodosPanel docstring); fires after every
+        # successful refresh so the parent UI can update its badge state.
+        self._on_change = on_change
         self._input.on_submit = self._on_submit
         self._add_btn.on_click = self._on_submit
         if tasks is None:
             self._show_unavailable()
+
+    def has_unchecked(self) -> bool:
+        """True if at least one grocery item is not yet checked off."""
+        return any(not i.done for i in self._items)
 
     def _show_unavailable(self) -> None:
         self._list.controls = [
@@ -182,6 +209,8 @@ class GroceryPanel(_ChecklistColumn):
             return
         self._list.controls = [self._row(i) for i in self._items]
         safe_update(self)
+        if self._on_change is not None:
+            self._on_change()
 
     def _row(self, t: GroceryItem) -> ft.Control:
         cb = ft.Checkbox(
