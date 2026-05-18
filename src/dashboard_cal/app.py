@@ -62,6 +62,10 @@ class DashboardApp:
         # has at least one unchecked item. Built in ``_compose``; mutated
         # from ``_update_tasks_badge``.
         self._tasks_badge: ft.Container | None = None
+        # Reference to the modal's close (X) button. We focus this on
+        # modal-close to pull focus off any focused TextField so the OS
+        # touch keyboard dismisses cleanly.
+        self._tasks_close_btn: ft.IconButton | None = None
 
     # ------------------------------------------------------------------
     # auth (lazy)
@@ -135,7 +139,12 @@ class DashboardApp:
             run_async=page.run_task,
             on_change=self._update_tasks_badge,
         )
-        self.tasks_modal = TasksModal(self._build_tasks_panel_content())
+        # Scrim taps route through ``_close_tasks`` (same handler as the
+        # X button) so both close paths share the keyboard-focus cleanup.
+        self.tasks_modal = TasksModal(
+            self._build_tasks_panel_content(),
+            on_dismiss=self._close_tasks,
+        )
 
         page.add(self._compose())
 
@@ -173,41 +182,30 @@ class DashboardApp:
         )
 
         # Small red notification dot pinned to the top-right corner of the
-        # tasks button. ``visible`` toggles in ``_update_tasks_badge`` based
-        # on whether either checklist still has unchecked items.
+        # tasks button. Positioning is on the badge itself (right/top) so
+        # the Stack doesn't need a wrapping container. ``visible`` toggles
+        # in ``_update_tasks_badge``.
         self._tasks_badge = ft.Container(
             width=12,
             height=12,
             bgcolor=theme.ERROR,
             border_radius=6,
             visible=False,
+            right=14,
+            top=14,
         )
 
-        # The whole card is the hit target -- not just the icon. Using an
-        # outer ``Container`` with ``on_click`` + ``ink=True`` gives the
-        # entire 72px-wide card a Material ripple and makes it forgiving
-        # to tap on a touchscreen. The icon and badge ride along inside a
-        # Stack so the badge floats over the top-right corner of the card.
+        # Whole card is the hit target -- ``on_click`` + ``ink=True`` give
+        # the 72px-wide card a Material ripple. ``Stack.alignment`` centers
+        # the icon; the badge stays in its top-right corner because it has
+        # explicit ``right``/``top`` set above.
         tasks_btn = ft.Container(
             content=ft.Stack(
                 controls=[
-                    ft.Container(
-                        content=ft.Icon(
-                            ft.Icons.CHECKLIST,
-                            color=theme.TEXT,
-                            size=28,
-                        ),
-                        alignment=ft.Alignment.CENTER,
-                        expand=True,
-                    ),
-                    # Positioned overlay: top-right corner inset slightly so
-                    # the dot doesn't kiss the card edge.
-                    ft.Container(
-                        content=self._tasks_badge,
-                        right=14,
-                        top=14,
-                    ),
+                    ft.Icon(ft.Icons.CHECKLIST, color=theme.TEXT, size=28),
+                    self._tasks_badge,
                 ],
+                alignment=ft.Alignment.CENTER,
                 expand=True,
             ),
             width=72,
@@ -258,6 +256,15 @@ class DashboardApp:
         divider, then Grocery. ``Column.scroll`` keeps the whole thing
         scrollable if the user adds many items.
         """
+        # Stash the close button on ``self`` so ``_close_tasks`` can
+        # ``focus()`` it -- moving focus off the text fields inside the
+        # panel forces the OS touch keyboard to dismiss.
+        self._tasks_close_btn = ft.IconButton(
+            icon=ft.Icons.CLOSE,
+            icon_color=theme.TEXT_MUTED,
+            on_click=self._close_tasks,
+            tooltip="Close",
+        )
         header = ft.Row(
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
             controls=[
@@ -268,12 +275,7 @@ class DashboardApp:
                     weight=ft.FontWeight.W_600,
                     expand=True,
                 ),
-                ft.IconButton(
-                    icon=ft.Icons.CLOSE,
-                    icon_color=theme.TEXT_MUTED,
-                    on_click=self._close_tasks,
-                    tooltip="Close",
-                ),
+                self._tasks_close_btn,
             ],
         )
         return ft.Column(
@@ -315,25 +317,27 @@ class DashboardApp:
             self.tasks_modal.open()
 
     def _close_tasks(self, _e: ft.ControlEvent | None = None) -> None:
-        if self.tasks_modal is not None:
-            self.tasks_modal.close()
+        if self.tasks_modal is None:
+            return
+        # Move keyboard focus to the close button (a non-text control)
+        # so the OS touch keyboard dismisses. Without this, a focused
+        # TextField inside the modal keeps the keyboard pinned open and
+        # makes it re-assert on later calendar taps.
+        if self._tasks_close_btn is not None and self._tasks_close_btn.page is not None:
+            self._tasks_close_btn.page.run_task(self._tasks_close_btn.focus)
+        self.tasks_modal.close()
 
     def _update_tasks_badge(self) -> None:
-        """Show the notification dot iff either checklist has unchecked items.
+        """Show the dot iff either checklist has at least one unchecked item.
 
-        Called from ``TodosPanel`` and ``GroceryPanel`` via their
-        ``on_change`` hooks after every add / toggle / delete / refresh.
-        ``safe_update`` swallows the not-yet-mounted exception so the very
-        first refresh (which may run before ``page.add`` finishes) doesn't
-        crash the UI.
+        Fires from both panels' ``on_change`` hooks after any mutation.
         """
         if self._tasks_badge is None:
             return
-        unchecked = False
-        if self.todos_panel is not None and self.todos_panel.has_unchecked():
-            unchecked = True
-        elif self.grocery_panel is not None and self.grocery_panel.has_unchecked():
-            unchecked = True
+        unchecked = bool(
+            (self.todos_panel and self.todos_panel.has_unchecked())
+            or (self.grocery_panel and self.grocery_panel.has_unchecked())
+        )
         if self._tasks_badge.visible != unchecked:
             self._tasks_badge.visible = unchecked
             safe_update(self._tasks_badge)

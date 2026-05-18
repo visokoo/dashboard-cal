@@ -2,8 +2,9 @@
 
 Composes two layers inside a single ``Stack``:
 
-1. A full-bleed scrim that darkens the underlying UI and intercepts taps
-   outside the panel to close it.
+1. A full-bleed scrim that darkens the underlying UI and forwards taps
+   to the parent's ``on_dismiss`` handler (typically the same handler
+   the X button uses).
 2. The panel itself, sized to ``PANEL_WIDTH`` and pinned to the right edge.
    ``Container.animate_offset`` slides it on and off screen with a single
    ``ft.Offset(1.0, 0)`` (== 100 % of its own width to the right) toggle.
@@ -31,11 +32,14 @@ ANIM_MS = 220
 class TasksModal(ft.Stack):
     """Hosts an arbitrary ``content`` control as a right-anchored drawer."""
 
-    def __init__(self, content: ft.Control) -> None:
+    def __init__(self, content: ft.Control, on_dismiss) -> None:
         self._open = False
         anim = ft.Animation(ANIM_MS, ft.AnimationCurve.EASE_OUT)
 
         # Scrim: full-bleed, transparent when closed, dim when open.
+        # Taps go straight to the parent's dismiss handler so the X-button
+        # and scrim-tap close paths share the same code path (including
+        # any focus / keyboard cleanup the parent wants to run).
         self._scrim = ft.Container(
             left=0,
             right=0,
@@ -43,7 +47,7 @@ class TasksModal(ft.Stack):
             bottom=0,
             bgcolor=ft.Colors.with_opacity(0.0, ft.Colors.BLACK),
             animate=anim,
-            on_click=self._handle_scrim_tap,
+            on_click=on_dismiss,
         )
 
         # The panel itself. The inner container holds the actual content; the
@@ -113,9 +117,6 @@ class TasksModal(ft.Stack):
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
-    def _handle_scrim_tap(self, _e: ft.ControlEvent) -> None:
-        self.close()
-
     def _on_anim_end(self, _e: ft.ControlEvent) -> None:
         """Called when the panel's offset animation finishes (open or close).
 

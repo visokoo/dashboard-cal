@@ -77,12 +77,7 @@ class TodosPanel(_ChecklistColumn):
 
     def has_unchecked(self) -> bool:
         """True if at least one todo is not yet checked off."""
-        try:
-            return any(not t.done for t in self._store.list())
-        except Exception as e:
-            # SQLite failure shouldn't crash the badge logic.
-            log.warning("todos: has_unchecked failed type=%s", type(e).__name__)
-            return False
+        return any(not t.done for t in self._store.list())
 
     def refresh(self) -> None:
         items = self._store.list()
@@ -145,12 +140,16 @@ class TodosPanel(_ChecklistColumn):
         self._input.value = ""
         self._input.error_text = None
         self.refresh()
-        # ``TextField.focus`` is a coroutine in Flet 0.85+, so we can't
-        # call it directly from a sync handler -- doing so triggers
-        # "coroutine ... was never awaited". Schedule it via the page.
-        page = self._input.page
+        # Intentionally do *not* re-focus the text field. We used to do
+        # that to let users rapid-fire add items, but it kept the OS
+        # touch keyboard pinned open after every submit and even leaked
+        # focus across the modal close (so the keyboard would pop back
+        # up on calendar taps). Moving focus to the add button -- which
+        # is a button, not a text input -- tells the OS to dismiss the
+        # keyboard while keeping a sensible focus ring near the field.
+        page = self._add_btn.page
         if page is not None:
-            page.run_task(self._input.focus)
+            page.run_task(self._add_btn.focus)
 
 
 class GroceryPanel(_ChecklistColumn):
@@ -279,9 +278,11 @@ class GroceryPanel(_ChecklistColumn):
             self._input.value = ""
             self._input.error_text = None
             await self.refresh()
-            # ``focus`` is async in Flet 0.85; await it here so the
-            # coroutine actually runs (previously it was created and
-            # discarded, producing a "never awaited" warning).
-            await self._input.focus()
+            # Move focus to the add button -- a non-text control -- so
+            # the OS touch keyboard dismisses after submit. Re-focusing
+            # the input here would keep the keyboard pinned open and
+            # bleed focus across the modal close (see TodosPanel for
+            # the longer-form note).
+            await self._add_btn.focus()
 
         self._run_async(_do)
