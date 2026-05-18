@@ -48,6 +48,9 @@ class TasksModal(ft.Stack):
 
         # The panel itself. The inner container holds the actual content; the
         # outer one owns the offset animation so the slide-in is smooth.
+        # ``on_animation_end`` is how we know the close animation has fully
+        # played -- at that point we can safely hide the whole Stack so the
+        # scrim stops intercepting pointer events.
         self._panel = ft.Container(
             content=ft.Container(
                 content=content,
@@ -63,6 +66,7 @@ class TasksModal(ft.Stack):
             # width to the right, parking it just off-screen.
             offset=ft.Offset(1.0, 0),
             animate_offset=anim,
+            on_animation_end=self._on_anim_end,
         )
 
         super().__init__(
@@ -95,9 +99,9 @@ class TasksModal(ft.Stack):
         self._open = False
         self._scrim.bgcolor = ft.Colors.with_opacity(0.0, ft.Colors.BLACK)
         self._panel.offset = ft.Offset(1.0, 0)
-        # We intentionally leave ``visible=True`` here so the slide-out
-        # animation has time to play. Re-opening from this state is fine
-        # because ``offset`` already reflects the closed position.
+        # Stay ``visible=True`` for now so the slide-out animation can
+        # play; ``_on_anim_end`` flips ``visible`` to False once it's done
+        # so the scrim stops intercepting taps on the dashboard underneath.
         safe_update(self)
 
     def toggle(self) -> None:
@@ -111,3 +115,19 @@ class TasksModal(ft.Stack):
     # ------------------------------------------------------------------
     def _handle_scrim_tap(self, _e: ft.ControlEvent) -> None:
         self.close()
+
+    def _on_anim_end(self, _e: ft.ControlEvent) -> None:
+        """Called when the panel's offset animation finishes (open or close).
+
+        For the close animation we need to fully un-mount the Stack from
+        hit-testing -- otherwise the full-bleed scrim (transparent but
+        still tap-eating because of its ``on_click`` handler) makes the
+        rest of the dashboard unclickable.
+
+        For the open animation this is a no-op (``_open`` is True).
+        Re-entrancy is safe: if the user re-opens before the close anim
+        finishes, ``_open`` will already be True by the time we fire here.
+        """
+        if not self._open and self.visible:
+            self.visible = False
+            safe_update(self)
