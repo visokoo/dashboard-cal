@@ -62,10 +62,6 @@ class DashboardApp:
         # has at least one unchecked item. Built in ``_compose``; mutated
         # from ``_update_tasks_badge``.
         self._tasks_badge: ft.Container | None = None
-        # Reference to the modal's close (X) button. We focus this on
-        # modal-close to pull focus off any focused TextField so the OS
-        # touch keyboard dismisses cleanly.
-        self._tasks_close_btn: ft.IconButton | None = None
 
     # ------------------------------------------------------------------
     # auth (lazy)
@@ -256,15 +252,6 @@ class DashboardApp:
         divider, then Grocery. ``Column.scroll`` keeps the whole thing
         scrollable if the user adds many items.
         """
-        # Stash the close button on ``self`` so ``_close_tasks`` can
-        # ``focus()`` it -- moving focus off the text fields inside the
-        # panel forces the OS touch keyboard to dismiss.
-        self._tasks_close_btn = ft.IconButton(
-            icon=ft.Icons.CLOSE,
-            icon_color=theme.TEXT_MUTED,
-            on_click=self._close_tasks,
-            tooltip="Close",
-        )
         header = ft.Row(
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
             controls=[
@@ -275,7 +262,12 @@ class DashboardApp:
                     weight=ft.FontWeight.W_600,
                     expand=True,
                 ),
-                self._tasks_close_btn,
+                ft.IconButton(
+                    icon=ft.Icons.CLOSE,
+                    icon_color=theme.TEXT_MUTED,
+                    on_click=self._close_tasks,
+                    tooltip="Close",
+                ),
             ],
         )
         return ft.Column(
@@ -317,15 +309,15 @@ class DashboardApp:
             self.tasks_modal.open()
 
     def _close_tasks(self, _e: ft.ControlEvent | None = None) -> None:
-        if self.tasks_modal is None:
-            return
-        # Move keyboard focus to the close button (a non-text control)
-        # so the OS touch keyboard dismisses. Without this, a focused
-        # TextField inside the modal keeps the keyboard pinned open and
-        # makes it re-assert on later calendar taps.
-        if self._tasks_close_btn is not None and self._tasks_close_btn.page is not None:
-            self._tasks_close_btn.page.run_task(self._tasks_close_btn.focus)
-        self.tasks_modal.close()
+        # We deliberately don't move focus here. Doing so was leaving
+        # the dashboard's tasks card in a "focused" visual state after
+        # the modal's close button unmounted. The keyboard still
+        # dismisses correctly: post-submit focus is on the add button
+        # (a non-text control), and ``visible=False`` after the slide-
+        # out animation unmounts any focused TextField, dropping the
+        # OS keyboard with it.
+        if self.tasks_modal is not None:
+            self.tasks_modal.close()
 
     def _update_tasks_badge(self) -> None:
         """Show the dot iff either checklist has at least one unchecked item.
